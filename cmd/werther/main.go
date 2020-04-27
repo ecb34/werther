@@ -59,8 +59,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Invalid configuration: %s\n", err)
 		os.Exit(1)
 	}
-	if _, ok := cnf.Identp.ClaimScopes[url.QueryEscape(cnf.LDAP.RoleClaim)]; !ok {
-		fmt.Fprintf(os.Stderr, "Roles claim %q has no mapping to an OpenID Connect scope\n", cnf.LDAP.RoleClaim)
+	if _, ok := cnf.Identp.ClaimScopes[url.QueryEscape(cnf.LDAP.RoleAppClaim)]; !ok {
+		fmt.Fprintf(os.Stderr, "Roles claim %q has no mapping to an OpenID Connect scope\n", cnf.LDAP.RoleAppClaim)
+		os.Exit(1)
+	}
+
+	if _, ok := cnf.Identp.ClaimScopes[url.QueryEscape(cnf.LDAP.RoleInstitutionClaim)]; !ok {
+		fmt.Fprintf(os.Stderr, "Roles claim %q has no mapping to an OpenID Connect scope\n", cnf.LDAP.RoleInstitutionClaim)
 		os.Exit(1)
 	}
 

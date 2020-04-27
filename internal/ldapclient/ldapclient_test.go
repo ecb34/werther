@@ -371,13 +371,13 @@ func TestFindOIDCClaims(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			client := New(Config{
-				Endpoints:  tc.connector.Endpoints(),
-				BindDN:     tc.bindDN,
-				BindPass:   tc.bindPass,
-				AttrClaims: tc.attrClaims,
-				RoleBaseDN: "ou=test,dc=local",
-				RoleClaim:  "test-roles-claim",
-				RoleAttr:   "test-roles-attr",
+				Endpoints:      tc.connector.Endpoints(),
+				BindDN:         tc.bindDN,
+				BindPass:       tc.bindPass,
+				AttrClaims:     tc.attrClaims,
+				RoleAppsBaseDN: "ou=test,dc=local",
+				RoleClaim:      "test-roles-claim",
+				RoleAttr:       "test-roles-attr",
 			})
 			client.connector = tc.connector
 			got, err := client.FindOIDCClaims(context.Background(), tc.user)
@@ -407,11 +407,11 @@ func TestClaimsCache(t *testing.T) {
 	ep := &testConn{users: users}
 	connector := newTestConnector("ep", ep)
 	client := New(Config{
-		Endpoints:  connector.Endpoints(),
-		AttrClaims: map[string]string{"dn": "name", "a": "claimA", "d": "claimD"},
-		RoleBaseDN: "ou=test,dc=local",
-		RoleClaim:  "test-roles-claim",
-		RoleAttr:   "test-roles-attr",
+		Endpoints:      connector.Endpoints(),
+		AttrClaims:     map[string]string{"dn": "name", "a": "claimA", "d": "claimD"},
+		RoleAppsBaseDN: "ou=test,dc=local",
+		RoleClaim:      "test-roles-claim",
+		RoleAttr:       "test-roles-attr",
 	})
 	client.connector = connector
 

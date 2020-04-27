@@ -38,7 +38,8 @@ var (
 type conn interface {
 	Bind(bindDN, password string) error
 	SearchUser(user string, attrs ...string) ([]map[string]interface{}, error)
-	SearchUserRoles(user string, attrs ...string) ([]map[string]interface{}, error)
+	SearchInstitutionsRoles(user string, attrs ...string) ([]map[string]interface{}, error)
+	searchAppRoles(user string, app string, attrs ...string) ([]map[string]interface{}, error)
 	Close()
 }
 
@@ -48,17 +49,19 @@ type connector interface {
 
 // Config is a LDAP configuration.
 type Config struct {
-	Endpoints  []string          `envconfig:"endpoints" required:"true" desc:"a LDAP's server URLs as \"<address>:<port>\""`
-	BindDN     string            `envconfig:"binddn" desc:"a LDAP bind DN"`
-	BindPass   string            `envconfig:"bindpw" json:"-" desc:"a LDAP bind password"`
-	BaseDN     string            `envconfig:"basedn" required:"true" desc:"a LDAP base DN for searching users"`
-	AttrClaims map[string]string `envconfig:"attr_claims" default:"name:name,sn:family_name,givenName:given_name,mail:email" desc:"a mapping of LDAP attributes to OpenID connect claims"`
-	RoleBaseDN string            `envconfig:"role_basedn" required:"true" desc:"a LDAP base DN for searching roles"`
-	RoleAttr   string            `envconfig:"role_attr" default:"description" desc:"a LDAP group's attribute that contains a role's name"`
-	RoleClaim  string            `envconfig:"role_claim" default:"https://github.com/i-core/werther/claims/roles" desc:"a name of an OpenID Connect claim that contains user roles"`
-	CacheSize  int               `envconfig:"cache_size" default:"512" desc:"a user info cache's size in KiB"`
-	CacheTTL   time.Duration     `envconfig:"cache_ttl" default:"30m" desc:"a user info cache TTL"`
-	IsTLS      bool              `envconfig:"is_tls" default:"false" desc:"should LDAP connection be established via TLS"`
+	Endpoints      []string          `envconfig:"endpoints" required:"true" desc:"a LDAP's server URLs as \"<address>:<port>\""`
+	BindDN         string            `envconfig:"binddn" desc:"a LDAP bind DN"`
+	BindPass       string            `envconfig:"bindpw" json:"-" desc:"a LDAP bind password"`
+	BaseDN         string            `envconfig:"basedn" required:"true" desc:"a LDAP base DN for searching users"`
+	AttrClaims     map[string]string `envconfig:"attr_claims" default:"name:name,sn:family_name,givenName:given_name,mail:email" desc:"a mapping of LDAP attributes to OpenID connect claims"`
+	RoleAppsBaseDN string            `envconfig:"role_app_basedn" required:"true" desc:"a LDAP base DN for searching app roles"`
+	RoleInstitutionsBaseDN string    `envconfig:"role_institution_basedn" required:"true" desc:"a LDAP base DN for searching institution roles"`
+	RoleAttr       string            `envconfig:"role_attr" default:"description" desc:"a LDAP group's attribute that contains a role's name"`
+	RoleInstitutionClaim string      `envconfig:"role_institution_claim" default:"https://dermalogin.com/claims/institutions/roles" desc:"a name of an OpenID Connect claim that contains user roles"`
+	RoleAppClaim  string 			 `envconfig:"role_app_claim" default:"https://dermalogin.com/claims/apps/roles" desc:"a name of an OpenID Connect claim that contains user roles"`
+	CacheSize      int               `envconfig:"cache_size" default:"512" desc:"a user info cache's size in KiB"`
+	CacheTTL       time.Duration     `envconfig:"cache_ttl" default:"30m" desc:"a user info cache TTL"`
+	IsTLS          bool              `envconfig:"is_tls" default:"false" desc:"should LDAP connection be established via TLS"`
 }
 
 // Client is a LDAP client (compatible with Active Directory).
@@ -72,7 +75,7 @@ type Client struct {
 func New(cnf Config) *Client {
 	return &Client{
 		Config:    cnf,
-		connector: &ldapConnector{BaseDN: cnf.BaseDN, RoleBaseDN: cnf.RoleBaseDN, IsTLS: cnf.IsTLS},
+		connector: &ldapConnector{BaseDN: cnf.BaseDN, RoleAppBaseDN: cnf.RoleAppsBaseDN, RoleInstitutionBaseDN: cnf.RoleInstitutionsBaseDN, IsTLS: cnf.IsTLS},
 		cache:     freecache.NewCache(cnf.CacheSize * 1024),
 	}
 }
@@ -120,7 +123,7 @@ func (cli *Client) Authenticate(ctx context.Context, username, password string) 
 }
 
 // FindOIDCClaims finds all OIDC claims for a user.
-func (cli *Client) FindOIDCClaims(ctx context.Context, username string) (map[string]interface{}, error) {
+func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string) (map[string]interface{}, error) {
 	if username == "" {
 		return nil, errMissedUsername
 	}
@@ -179,12 +182,33 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username string) (map[str
 	}
 
 	// User's roles is stored in LDAP as groups. We find all groups in a role's DN
-	// that include the user as a member.
-	entries, err := cn.SearchUserRoles(fmt.Sprintf("%s", details["dn"]), "dn", cli.RoleAttr)
+	// that include the user as a member. GET ALL ROLES FOR INSTITUTIONS
+	entries, err := cn.SearchInstitutionsRoles(fmt.Sprintf("%s", details["dn"]), "dn", cli.RoleAttr)
 	if err != nil {
 		return nil, err
 	}
 
+	claims[cli.RoleInstitutionClaim] = cli.GetRolesFromEntries(entries,log)
+
+	entries, err = cn.searchAppRoles(fmt.Sprintf("%s", details["dn"]), clientID, "dn", cli.RoleAttr)
+	if err != nil {
+		return nil, err
+	}
+	claims[cli.RoleAppClaim] = cli.GetRolesFromEntries(entries,log)
+
+	// Save the claims in the cache for future queries.
+	cdata, err := json.Marshal(claims)
+	if err != nil {
+		log.Infow("Failed to marshal user's OIDC claims for caching", zap.Error(err), "claims", claims)
+	}
+	if err = cli.cache.Set([]byte(username), cdata, int(cli.CacheTTL.Seconds())); err != nil {
+		log.Infow("Failed to store user's OIDC claims into the cache", zap.Error(err), "claims", claims)
+	}
+
+	return claims, nil
+}
+
+func (cli *Client) GetRolesFromEntries(entries []map[string]interface{}, log *zap.SugaredLogger) map[string]interface{} {
 	roles := make(map[string]interface{})
 	for _, entry := range entries {
 		roleDN, ok := entry["dn"].(string)
@@ -199,8 +223,8 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username string) (map[str
 
 		// Ensure that a role's DN is inside of the role's base DN.
 		// It's sufficient to compare the DN's suffix with the base DN.
-		n, k := len(roleDN), len(cli.RoleBaseDN)
-		if n < k || !strings.EqualFold(roleDN[n-k:], cli.RoleBaseDN) {
+		n, k := len(roleDN), len(cli.RoleInstitutionsBaseDN)
+		if n < k || !strings.EqualFold(roleDN[n-k:], cli.RoleInstitutionsBaseDN) {
 			panic("You should never see that")
 		}
 		// The DN without the role's base DN must contain a CN and OU
@@ -208,10 +232,10 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username string) (map[str
 		path := strings.Split(roleDN[:n-k-1], ",")
 		if len(path) != 2 {
 			log.Infow("A role's DN without the role's base DN must contain two nodes only",
-				"roleBaseDN", cli.RoleBaseDN, "roleDN", roleDN)
+				"roleBaseDN", cli.RoleInstitutionsBaseDN, "roleDN", roleDN)
 			continue
 		}
-		appID := path[1][len("OU="):]
+		appID := path[1][len("O="):]
 
 		var appRoles []interface{}
 		if v := roles[appID]; v != nil {
@@ -219,18 +243,8 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username string) (map[str
 		}
 		roles[appID] = append(appRoles, entry[cli.RoleAttr])
 	}
-	claims[cli.RoleClaim] = roles
 
-	// Save the claims in the cache for future queries.
-	cdata, err := json.Marshal(claims)
-	if err != nil {
-		log.Infow("Failed to marshal user's OIDC claims for caching", zap.Error(err), "claims", claims)
-	}
-	if err = cli.cache.Set([]byte(username), cdata, int(cli.CacheTTL.Seconds())); err != nil {
-		log.Infow("Failed to store user's OIDC claims into the cache", zap.Error(err), "claims", claims)
-	}
-
-	return claims, nil
+	return roles
 }
 
 func (cli *Client) connect(ctx context.Context) <-chan conn {
@@ -295,10 +309,13 @@ func (cli *Client) findBasicUserDetails(cn conn, username string, attrs []string
 	return details, nil
 }
 
+
+
 type ldapConnector struct {
-	BaseDN     string
-	RoleBaseDN string
-	IsTLS      bool
+	BaseDN        string
+	RoleAppBaseDN string
+	RoleInstitutionBaseDN string
+	IsTLS         bool
 }
 
 func (c *ldapConnector) Connect(ctx context.Context, addr string) (conn, error) {
@@ -319,13 +336,14 @@ func (c *ldapConnector) Connect(ctx context.Context, addr string) (conn, error) 
 	ldapcn := ldap.NewConn(tcpcn, c.IsTLS)
 
 	ldapcn.Start()
-	return &ldapConn{Conn: ldapcn, BaseDN: c.BaseDN, RoleBaseDN: c.RoleBaseDN}, nil
+	return &ldapConn{Conn: ldapcn, BaseDN: c.BaseDN, RoleAppBaseDN: c.RoleAppBaseDN, RoleInstitutionBaseDN: c.RoleInstitutionBaseDN}, nil
 }
 
 type ldapConn struct {
 	*ldap.Conn
-	BaseDN     string
-	RoleBaseDN string
+	BaseDN                string
+	RoleAppBaseDN         string
+	RoleInstitutionBaseDN string
 }
 
 func (c *ldapConn) Bind(bindDN, password string) error {
@@ -343,12 +361,21 @@ func (c *ldapConn) SearchUser(user string, attrs ...string) ([]map[string]interf
 	return c.searchEntries(c.BaseDN, query, attrs)
 }
 
-func (c *ldapConn) SearchUserRoles(user string, attrs ...string) ([]map[string]interface{}, error) {
+func (c *ldapConn) SearchInstitutionsRoles(user string, attrs ...string) ([]map[string]interface{}, error) {
 	query := fmt.Sprintf("(|"+
 		"(&(|(objectClass=group)(objectClass=groupOfNames))(member=%[1]s))"+
 		"(&(objectClass=groupOfUniqueNames)(uniqueMember=%[1]s))"+
 		")", user)
-	return c.searchEntries(c.RoleBaseDN, query, attrs)
+	return c.searchEntries(c.RoleInstitutionBaseDN, query, attrs)
+}
+
+func (c *ldapConn) searchAppRoles(user, app string, attrs ...string) ([]map[string]interface{},error) {
+	query := fmt.Sprintf("(|"+
+		"(&(|(objectClass=group)(objectClass=groupOfNames))(member=%[1]s))"+
+		"(&(objectClass=groupOfUniqueNames)(uniqueMember=%[1]s))"+
+		")", user)
+	appBaseDN := "o=" + app + "," + c.RoleAppBaseDN
+	return c.searchEntries(appBaseDN, query, attrs)
 }
 
 // searchEntries executes a LDAP query, and returns a result as entries where each entry is mapping of LDAP attributes.

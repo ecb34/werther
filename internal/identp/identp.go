@@ -47,7 +47,7 @@ type authenticator interface {
 
 // oidcClaimsFinder is an interface that is used for searching OpenID Connect claims for the given username.
 type oidcClaimsFinder interface {
-	FindOIDCClaims(ctx context.Context, username string) (map[string]interface{}, error)
+	FindOIDCClaims(ctx context.Context, username, clientID string) (map[string]interface{}, error)
 }
 
 // TemplateRenderer renders a template with data and writes it to a http.ResponseWriter.
@@ -250,7 +250,8 @@ func newConsentHandler(rproc oa2ConsentReqProcessor, cfinder oidcClaimsFinder, c
 		}
 		log.Infow("A consent request is initiated", "challenge", challenge, "username", ri.Subject)
 
-		claims, err := cfinder.FindOIDCClaims(r.Context(), ri.Subject)
+		log.Infow("Consent request initiation","Client ID", ri.Client.ClientID)
+		claims, err := cfinder.FindOIDCClaims(r.Context(), ri.Subject, ri.Client.ClientID)
 		if err != nil {
 			log.Infow("Failed to find user's OIDC claims", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

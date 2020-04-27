@@ -36,12 +36,17 @@ const (
 	logout  reqType = "logout"
 )
 
+type Client struct{
+	ClientID	string `json:"client_id"`
+}
+
 // ReqInfo contains information on an ongoing login or consent request.
 type ReqInfo struct {
 	Challenge       string   `json:"challenge"`
 	RequestedScopes []string `json:"requested_scope"`
 	Skip            bool     `json:"skip"`
 	Subject         string   `json:"subject"`
+	Client			Client 	 `json:"client"`
 }
 
 func initiateRequest(typ reqType, hydraURL, challenge string) (*ReqInfo, error) {
