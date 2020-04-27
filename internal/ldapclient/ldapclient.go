@@ -188,13 +188,13 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string
 		return nil, err
 	}
 
-	claims[cli.RoleInstitutionClaim] = cli.GetRolesFromEntries(entries, cli.RoleAppsBaseDN, log)
+	claims[cli.RoleInstitutionClaim] = cli.GetRolesFromEntries(entries, cli.RoleInstitutionsBaseDN, log)
 
 	entries, err = cn.searchAppRoles(fmt.Sprintf("%s", details["dn"]), clientID, "dn", cli.RoleAttr)
 	if err != nil {
 		return nil, err
 	}
-	claims[cli.RoleAppClaim] = cli.GetRolesFromEntries(entries, cli.RoleInstitutionsBaseDN, log)
+	claims[cli.RoleAppClaim] = cli.GetRolesFromEntries(entries, cli.RoleAppsBaseDN, log)
 
 	// Save the claims in the cache for future queries.
 	cdata, err := json.Marshal(claims)
