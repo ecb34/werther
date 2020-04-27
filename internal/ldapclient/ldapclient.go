@@ -188,13 +188,13 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string
 		return nil, err
 	}
 
-	claims[cli.RoleInstitutionClaim] = cli.GetRolesFromEntries(entries,log)
+	claims[cli.RoleInstitutionClaim] = cli.GetRolesFromEntries(entries, cli.RoleAppsBaseDN, log)
 
 	entries, err = cn.searchAppRoles(fmt.Sprintf("%s", details["dn"]), clientID, "dn", cli.RoleAttr)
 	if err != nil {
 		return nil, err
 	}
-	claims[cli.RoleAppClaim] = cli.GetRolesFromEntries(entries,log)
+	claims[cli.RoleAppClaim] = cli.GetRolesFromEntries(entries, cli.RoleInstitutionsBaseDN, log)
 
 	// Save the claims in the cache for future queries.
 	cdata, err := json.Marshal(claims)
@@ -208,7 +208,7 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string
 	return claims, nil
 }
 
-func (cli *Client) GetRolesFromEntries(entries []map[string]interface{}, log *zap.SugaredLogger) map[string]interface{} {
+func (cli *Client) GetRolesFromEntries(entries []map[string]interface{},baseDN string, log *zap.SugaredLogger) map[string]interface{} {
 	roles := make(map[string]interface{})
 	for _, entry := range entries {
 		roleDN, ok := entry["dn"].(string)
@@ -223,8 +223,8 @@ func (cli *Client) GetRolesFromEntries(entries []map[string]interface{}, log *za
 
 		// Ensure that a role's DN is inside of the role's base DN.
 		// It's sufficient to compare the DN's suffix with the base DN.
-		n, k := len(roleDN), len(cli.RoleInstitutionsBaseDN)
-		if n < k || !strings.EqualFold(roleDN[n-k:], cli.RoleInstitutionsBaseDN) {
+		n, k := len(roleDN), len(baseDN)
+		if n < k || !strings.EqualFold(roleDN[n-k:], baseDN) {
 			panic("You should never see that")
 		}
 		// The DN without the role's base DN must contain a CN and OU
@@ -232,7 +232,7 @@ func (cli *Client) GetRolesFromEntries(entries []map[string]interface{}, log *za
 		path := strings.Split(roleDN[:n-k-1], ",")
 		if len(path) != 2 {
 			log.Infow("A role's DN without the role's base DN must contain two nodes only",
-				"roleBaseDN", cli.RoleInstitutionsBaseDN, "roleDN", roleDN)
+				"roleBaseDN", baseDN, "roleDN", roleDN)
 			continue
 		}
 		appID := path[1][len("O="):]
