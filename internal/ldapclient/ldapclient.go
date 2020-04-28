@@ -211,19 +211,17 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string
 func (cli *Client) GetAppRolesFromEntries(entries []map[string]interface{}, log *zap.SugaredLogger) []string {
 	var roles []string
 
-	if len(entries) == 1 {
-		for _, entry := range entries {
-			roleDN, ok := entry["dn"].(string)
-			if !ok || roleDN == "" {
-				log.Infow("No required LDAP attribute for a role", "ldapAttribute", "dn", "entry", entry)
-			}
-			if entry[cli.RoleAttr] == nil {
-				log.Infow("No required LDAP attribute for a role", "ldapAttribute", cli.RoleAttr, "roleDN", roleDN)
-			}
-			roles = append(roles, entry[cli.RoleAttr].(string))
+	for _, entry := range entries {
+		roleDN, ok := entry["dn"].(string)
+		if !ok || roleDN == "" {
+			log.Infow("No required LDAP attribute for a role", "ldapAttribute", "dn", "entry", entry)
+			continue
 		}
-	}else {
-		log.Infow("More than one entry found for application", "entry", entries)
+		if entry[cli.RoleAttr] == nil {
+			log.Infow("No required LDAP attribute for a role", "ldapAttribute", cli.RoleAttr, "roleDN", roleDN)
+			continue
+		}
+		roles = append(roles, entry[cli.RoleAttr].(string))
 	}
 	return roles
 }
