@@ -188,13 +188,13 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string
 		return nil, err
 	}
 
-	claims[cli.RoleInstitutionClaim] = cli.GetRolesFromEntries(entries, cli.RoleInstitutionsBaseDN, log)
+	claims[cli.RoleInstitutionClaim] = cli.GetInstitutionsRolesFromEntries(entries, log)
 
 	entries, err = cn.searchAppRoles(fmt.Sprintf("%s", details["dn"]), clientID, "dn", cli.RoleAttr)
 	if err != nil {
 		return nil, err
 	}
-	claims[cli.RoleAppClaim] = cli.GetRolesFromEntries(entries, cli.RoleAppsBaseDN, log)
+	claims[cli.RoleAppClaim] = cli.GetAppRolesFromEntries(entries,log)
 
 	// Save the claims in the cache for future queries.
 	cdata, err := json.Marshal(claims)
@@ -208,7 +208,27 @@ func (cli *Client) FindOIDCClaims(ctx context.Context, username, clientID string
 	return claims, nil
 }
 
-func (cli *Client) GetRolesFromEntries(entries []map[string]interface{},baseDN string, log *zap.SugaredLogger) map[string]interface{} {
+func (cli *Client) GetAppRolesFromEntries(entries []map[string]interface{}, log *zap.SugaredLogger) []string {
+	var roles []string
+
+	if len(entries) == 1 {
+		for _, entry := range entries {
+			roleDN, ok := entry["dn"].(string)
+			if !ok || roleDN == "" {
+				log.Infow("No required LDAP attribute for a role", "ldapAttribute", "dn", "entry", entry)
+			}
+			if entry[cli.RoleAttr] == nil {
+				log.Infow("No required LDAP attribute for a role", "ldapAttribute", cli.RoleAttr, "roleDN", roleDN)
+			}
+			roles = append(roles, entry[cli.RoleAttr].(string))
+		}
+	}else {
+		log.Infow("More than one entry found for application", "entry", entries)
+	}
+	return roles
+}
+
+func (cli *Client) GetInstitutionsRolesFromEntries(entries []map[string]interface{}, log *zap.SugaredLogger) map[string]interface{} {
 	roles := make(map[string]interface{})
 	for _, entry := range entries {
 		roleDN, ok := entry["dn"].(string)
@@ -223,8 +243,8 @@ func (cli *Client) GetRolesFromEntries(entries []map[string]interface{},baseDN s
 
 		// Ensure that a role's DN is inside of the role's base DN.
 		// It's sufficient to compare the DN's suffix with the base DN.
-		n, k := len(roleDN), len(baseDN)
-		if n < k || !strings.EqualFold(roleDN[n-k:], baseDN) {
+		n, k := len(roleDN), len(cli.RoleInstitutionsBaseDN)
+		if n < k || !strings.EqualFold(roleDN[n-k:], cli.RoleInstitutionsBaseDN) {
 			panic("You should never see that")
 		}
 		// The DN without the role's base DN must contain a CN and OU
@@ -232,16 +252,16 @@ func (cli *Client) GetRolesFromEntries(entries []map[string]interface{},baseDN s
 		path := strings.Split(roleDN[:n-k-1], ",")
 		if len(path) != 2 {
 			log.Infow("A role's DN without the role's base DN must contain two nodes only",
-				"roleBaseDN", baseDN, "roleDN", roleDN)
+				"roleBaseDN", cli.RoleInstitutionsBaseDN, "roleDN", roleDN)
 			continue
 		}
-		appID := path[1][len("O="):]
+		institutionID := path[1][len("O="):]
 
-		var appRoles []interface{}
-		if v := roles[appID]; v != nil {
-			appRoles = v.([]interface{})
+		var institutionRoles []interface{}
+		if v := roles[institutionID]; v != nil {
+			institutionRoles = v.([]interface{})
 		}
-		roles[appID] = append(appRoles, entry[cli.RoleAttr])
+		roles[institutionID] = append(institutionRoles, entry[cli.RoleAttr])
 	}
 
 	return roles
@@ -308,8 +328,6 @@ func (cli *Client) findBasicUserDetails(cn conn, username string, attrs []string
 	}
 	return details, nil
 }
-
-
 
 type ldapConnector struct {
 	BaseDN        string
